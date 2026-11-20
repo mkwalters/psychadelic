@@ -16,10 +16,10 @@
   const floatTargets = !!gl.getExtension('EXT_color_buffer_float');
 
   const settings = {
-    flow: 1,        // overall speed
-    melt: 0.9,      // feedback amount (trail length)
+    flow: 0.57,     // overall speed (slider starts ~25% along)
+    melt: 0.62,     // feedback amount (trail length; slider starts ~25% along)
     cycle: 1,       // colour cycling speed
-    holdSeconds: 18,
+    holdSeconds: 6,
     fadeSeconds: 9,
   };
 
@@ -442,7 +442,7 @@
   let pendingVel = [0, 0], mouseVel = [0, 0];
   let presence = 0, presenceTarget = 0;   // fades the cursor effect in/out
   let holding = false, hold = 0, pourT = 0;
-  let cursorFx = true;                    // stir / splash / pour enabled
+  let cursorFx = false;                   // stir / splash / pour enabled
   const drops = [];                       // {x, y, age, seed}
   const dropData = new Float32Array(32);
 
@@ -655,7 +655,6 @@
   }
   bindSlider('sl-flow', 'flow');
   bindSlider('sl-melt', 'melt');
-  bindSlider('sl-cycle', 'cycle');
 
   // How long each design stays before morphing to the next (far right = never).
   const holdEl = document.getElementById('sl-hold');
