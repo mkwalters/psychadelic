@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>psychadelic</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="art"></canvas>
+
+  <div id="ui">
+    <div class="brand">psychadelic <span>— evolving fractal flames</span></div>
+    <div class="controls">
+      <button id="btn-new" title="New sheep (N)">New ✦</button>
+      <button id="btn-dream" title="Pause / dream (Space)">Pause ❚❚</button>
+      <button id="btn-save" title="Save PNG (S)">Save</button>
+      <button id="btn-share" title="Copy share link (L)">Share</button>
+      <button id="btn-full" title="Fullscreen (F)">⛶</button>
+      <label>Trails <input id="sl-trails" type="range" min="0.5" max="0.98" step="0.01"></label>
+      <label>Spin <input id="sl-speed" type="range" min="0" max="4" step="0.1"></label>
+      <label>Glow <input id="sl-bright" type="range" min="0.6" max="3" step="0.05"></label>
+    </div>
+    <div class="hint">Space pause · N new · S save · L share · H hide</div>
+  </div>
+
+  <div id="status"></div>
+  <div id="flash"></div>
+
+  <script src="js/flame.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
