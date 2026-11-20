@@ -752,7 +752,7 @@
     if (!paused) {
       if (rawDt < 0.1) adapt(rawDt);
       update(Math.min(0.1, rawDt));
-      updateWobble(Math.min(0.1, rawDt));
+      wobble.update(Math.min(0.1, rawDt));
       step(false);
     }
     requestAnimationFrame(frame);
@@ -810,163 +810,20 @@
     else document.documentElement.requestFullscreen().catch(() => {});
   };
 
-  // ---------- Slider wobble ----------
-  // Each slider can drift around its own position on its own. The thumb you
-  // set is the centre of the wobble; Range is how wide the swing is (as a
-  // fraction of the whole slider) and Speed is how long one swing takes.
-  // The motion is a blend of three sines at unrelated rates, so it never
-  // obviously repeats and the sliders never fall into step with each other.
-  const WOBBLE_DEFAULTS = {
-    flow: { range: 0.3, speed: 0.4 },
-    melt: { range: 0.35, speed: 0.35 },
-    geo: { range: 0.7, speed: 0.25 }, // big, slow swells into and out of geometry
-  };
-  const wobbleSeconds = (speed) => 60 * Math.pow(4 / 60, speed); // 60s … 4s per swing
-  const fmtSeconds = (sec) => (sec < 10 ? `${sec.toFixed(1)}s` : `${Math.round(sec)}s`);
-
+  // ---------- Slider wobble (js/wobble.js) ----------
   // The Flow slider is a position 0…1, mapped onto speed with a curve:
   // the slow end gets fine control and stays alive (never frozen), the top
   // stays exciting without turning into a blur.
   //   0% → 0.04 (slow drift) · 25% → 0.17 · 55% (start) → 0.47 · 100% → 1.1
-  const SLIDER_CURVES = {
-    flow: { start: 0.55, toValue: (x) => 0.04 + 1.06 * Math.pow(x, 1.5) },
-  };
-  const toValue = (w, x) => (w.curve ? w.curve.toValue(x) : x);
-
-  const wobbles = [];
-  function setupSlider(ctl) {
-    const key = ctl.dataset.key;
-    const el = ctl.querySelector('input');
-    const w = {
-      key, el, ctl,
-      min: parseFloat(el.min), max: parseFloat(el.max),
-      curve: SLIDER_CURVES[key],
-      center: SLIDER_CURVES[key] ? SLIDER_CURVES[key].start : settings[key],
-      on: false, open: false, dragging: false,
-      engage: 0,
-      phase: Math.random() * 100,
-      p1: Math.random() * 6.28, p2: Math.random() * 6.28,
-      ...WOBBLE_DEFAULTS[key],
-    };
-    wobbles.push(w);
-
-    // Wrap the slider so a glowing bar underneath can show the wobble zone.
-    const track = document.createElement('span');
-    track.className = 'track';
-    el.replaceWith(track);
-    track.appendChild(el);
-    w.zone = document.createElement('i');
-    w.zone.className = 'zone';
-    track.appendChild(w.zone);
-
-    const btn = document.createElement('button');
-    btn.className = 'wob';
-    btn.title = `Wobble ${ctl.dataset.name}`;
-    btn.innerHTML = '<span>∿</span>';
-    ctl.appendChild(btn);
-
-    const pop = document.createElement('div');
-    pop.className = 'pop';
-    pop.innerHTML = `
-      <div class="pop-head">${ctl.dataset.name} wobble <button class="tgl"></button></div>
-      <label title="How far it swings around where you set it"><span class="name">Range</span>
-        <input class="w-range" type="range" min="0.02" max="1" step="0.01"><span class="val r-val"></span></label>
-      <label title="How long one swing takes"><span class="name">Speed</span>
-        <input class="w-speed" type="range" min="0" max="1" step="0.01"><span class="val s-val"></span></label>`;
-    ctl.appendChild(pop);
-    w.tgl = pop.querySelector('.tgl');
-    const rEl = pop.querySelector('.w-range');
-    const sEl = pop.querySelector('.w-speed');
-    const rVal = pop.querySelector('.r-val');
-    const sVal = pop.querySelector('.s-val');
-    const showRS = () => {
-      rVal.textContent = `±${Math.round(w.range * 50)}%`;
-      sVal.textContent = fmtSeconds(wobbleSeconds(w.speed));
-    };
-    rEl.value = w.range;
-    sEl.value = w.speed;
-    rEl.oninput = () => { w.range = parseFloat(rEl.value); showRS(); drawZone(w); };
-    sEl.oninput = () => { w.speed = parseFloat(sEl.value); showRS(); };
-    showRS();
-
-    btn.onclick = () => {
-      if (w.open) { setOpen(w, false); return; }
-      if (!w.on) setWobble(w, true); // first click means "make it wobble"
-      setOpen(w, true);
-    };
-    w.tgl.onclick = () => setWobble(w, !w.on);
-
-    // While you drag, the thumb follows your hand and becomes the new centre;
-    // the wobble eases out and back in around it.
-    el.value = w.center;
-    settings[key] = toValue(w, w.center);
-    el.oninput = () => {
-      w.center = parseFloat(el.value);
-      if (w.engage < 0.001) settings[key] = toValue(w, w.center);
-      drawZone(w);
-    };
-    el.addEventListener('pointerdown', () => { w.dragging = true; });
-    window.addEventListener('pointerup', () => { w.dragging = false; });
-    window.addEventListener('pointercancel', () => { w.dragging = false; });
-    setWobble(w, false);
-  }
-
-  function setWobble(w, on) {
-    w.on = on;
-    w.ctl.classList.toggle('wobbling', on);
-    w.tgl.textContent = on ? 'On' : 'Off';
-    w.tgl.classList.toggle('off', !on);
-    drawZone(w);
-  }
-  function setOpen(w, open) {
-    for (const o of wobbles) if (o !== w || !open) { o.open = false; o.ctl.classList.remove('open'); }
-    w.open = open;
-    w.ctl.classList.toggle('open', open);
-  }
-  function toggleAllWobble() {
-    const on = wobbles.some((w) => !w.on);
-    for (const w of wobbles) setWobble(w, on);
-    flash(on ? 'Wobble on: Flow, Melt, Geometry' : 'Wobble off');
-  }
-
-  // The zone always fits inside the slider: near either end the centre is
-  // nudged inward rather than letting the swing get stuck against the stop.
-  function wobbleZone(w) {
-    const span = w.max - w.min;
-    const amp = w.range * span * 0.5;
-    const c = Math.min(w.max - amp, Math.max(w.min + amp, w.center));
-    return { amp, c, span };
-  }
-  function drawZone(w) {
-    const { amp, c, span } = wobbleZone(w);
-    w.zone.style.setProperty('--lo', ((c - amp - w.min) / span).toFixed(4));
-    w.zone.style.setProperty('--hi', ((c + amp - w.min) / span).toFixed(4));
-  }
-
-  function updateWobble(dt) {
-    for (const w of wobbles) {
-      const target = w.on && !w.dragging ? 1 : 0;
-      const before = w.engage;
-      w.engage += (target - w.engage) * Math.min(1, dt * 1.2);
-      if (w.engage < 0.001 && target === 0) {
-        w.engage = 0;
-        if (before > 0) { settings[w.key] = toValue(w, w.center); if (!w.dragging) w.el.value = w.center; }
-        continue;
-      }
-      w.phase += (dt * 2 * Math.PI) / wobbleSeconds(w.speed);
-      const ph = w.phase;
-      const s = 0.6 * Math.sin(ph) + 0.28 * Math.sin(ph * 1.618 + w.p1) + 0.12 * Math.sin(ph * 2.718 + w.p2);
-      const { amp, c } = wobbleZone(w);
-      const centre = w.center + (c - w.center) * w.engage;
-      const v = centre + amp * s * w.engage;
-      settings[w.key] = toValue(w, v);
-      if (!w.dragging) w.el.value = v;
-    }
-  }
-
-  document.querySelectorAll('.ctl[data-key]').forEach(setupSlider);
-  document.addEventListener('pointerdown', (e) => {
-    if (!e.target.closest('.ctl')) for (const w of wobbles) setOpen(w, false);
+  const wobble = window.SliderWobble({
+    settings,
+    flash,
+    curves: { flow: (x) => 0.04 + 1.06 * Math.pow(x, 1.5) },
+    defaults: {
+      flow: { start: 0.55, range: 0.3, speed: 0.4 },
+      melt: { range: 0.35, speed: 0.35 },
+      geo: { range: 0.7, speed: 0.25 }, // big, slow swells into and out of geometry
+    },
   });
 
   // How long each design stays before morphing to the next (far right = never).
@@ -990,8 +847,8 @@
       case 'n': newVibe(); break;
       case 'p': cyclePattern(); break;
       case 'c': toggleCursor(); break;
-      case 'w': toggleAllWobble(); break;
-      case 'escape': for (const w of wobbles) setOpen(w, false); break;
+      case 'w': wobble.toggleAll(); break;
+      case 'escape': wobble.closeAll(); break;
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
       case 'h': ui.classList.toggle('hidden'); break;
