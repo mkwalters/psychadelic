@@ -97,3 +97,72 @@ a.nav {
 }
 a.nav:hover { opacity: 1; text-decoration: underline; }
 .val { min-width: 3.5em; font-size: 12px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+/* ---- Slider wobble (light show) ---- */
+.ctl { position: relative; display: flex; align-items: center; gap: 6px; }
+.ctl > label { opacity: 0.85; }
+.track { position: relative; display: inline-flex; align-items: center; }
+.zone {
+  position: absolute;
+  left: calc(8px + var(--lo, 0.4) * (100% - 16px));
+  width: calc((var(--hi, 0.6) - var(--lo, 0.4)) * (100% - 16px));
+  bottom: -4px;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #ff5ec8, #ffd36b, #6fd3ff);
+  box-shadow: 0 0 6px rgba(255, 120, 220, 0.7);
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+.ctl.wobbling .zone { opacity: 0.9; }
+
+button.wob {
+  padding: 1px 7px;
+  font-size: 15px;
+  line-height: 1.2;
+  border-radius: 7px;
+  opacity: 0.55;
+  background: rgba(255, 255, 255, 0.06);
+}
+button.wob:hover { opacity: 0.9; }
+button.wob span { display: inline-block; }
+.ctl.wobbling button.wob {
+  opacity: 1;
+  background: linear-gradient(135deg, rgba(255, 60, 200, 0.6), rgba(60, 160, 255, 0.6));
+  box-shadow: 0 0 10px rgba(255, 90, 220, 0.55);
+}
+.ctl.wobbling button.wob span { animation: wiggle 1.8s ease-in-out infinite; }
+@keyframes wiggle {
+  0%, 100% { transform: translateX(-2px) rotate(-8deg); }
+  50% { transform: translateX(2px) rotate(8deg); }
+}
+
+.pop {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  z-index: 2;
+  width: 230px;
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 12px;
+  background: rgba(14, 8, 28, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 6px);
+  transition: opacity 0.2s, transform 0.2s;
+  cursor: default;
+}
+.ctl.open .pop { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+.pop-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 13px; }
+.pop-head button { padding: 2px 10px; font-size: 12px; min-width: 3.4em; }
+.pop-head button.off { background: rgba(255, 255, 255, 0.08); }
+.pop label { justify-content: space-between; font-size: 12px; }
+.pop label span.name { width: 3.6em; }
+.pop input[type=range] { flex: 1; width: auto; min-width: 0; }
+.pop .val { min-width: 3.2em; text-align: right; }
