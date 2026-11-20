@@ -1,8 +1,8 @@
 'use strict';
 // Liquid light show: a 60s concert-projection / tie-dye shader with a melting
 // feedback loop. Pass 1 draws the scene blended over a warped copy of the
-// previous frame (so everything smears, flows and colour-shifts); pass 2 adds
-// chromatic fringing, glow, fabric grain and vignette.
+// previous frame (so everything smears, flows and drips); pass 2 adds a wet
+// glossy sheen, chromatic fringing, glow, fabric grain and vignette.
 
 (() => {
   const canvas = document.getElementById('art');
@@ -18,7 +18,7 @@
   const settings = {
     flow: 1,        // overall speed
     melt: 0.9,      // feedback amount (trail length)
-    drift: 0.012,   // hue rotation of trails per frame (radians)
+    cycle: 1,       // colour cycling speed
     holdSeconds: 18,
     fadeSeconds: 9,
   };
@@ -57,24 +57,41 @@
     }
     return s;
   }
+  vec2 rot(vec2 v, float a) {
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c) * v;
+  }
+  float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
   `;
 
   const SIM = COMMON + `
   uniform sampler2D uPrev;
   uniform vec2 uRes;
-  uniform float uTime, uMelt, uDrift, uFlow, uMix;
-  uniform vec2 uMouse, uMouseVel;
+  uniform float uTime, uClock, uMelt, uDrift, uFlow, uMix, uHueMul;
+  uniform vec2 uMouse, uMouseVel, uCenter;
+  uniform float uPresence, uHold;
   uniform vec4 uA0, uA1, uA2, uB0, uB1, uB2;
+  uniform vec3 uPalA[5], uPalB[5];
+  uniform float uFlowW[6];
+  uniform vec4 uDrops[8];   // x, y, age, colour seed
 
-  vec3 pal(float t, float c, vec3 d) {
-    return 0.55 + 0.45 * cos(6.2831853 * (c * t + d));
+  // Cyclic 5-colour gradient. Low "soft" keeps colours pure with quick
+  // transitions (tie-dye); high soft blends smoothly (oil).
+  vec3 grad(vec3 P[5], float t, float soft) {
+    t = fract(t) * 5.0;
+    int i = min(int(t), 4);
+    int j = i == 4 ? 0 : i + 1;
+    float f = smoothstep(0.5 - soft, 0.5 + soft, fract(t));
+    return mix(P[i], P[j], f);
+  }
+  vec3 ink(float t) {
+    return mix(grad(uPalA, t, 0.25), grad(uPalB, t, 0.25), uMix);
   }
 
-  vec3 scene(vec2 p, float t, vec4 P0, vec4 P1, vec4 P2) {
+  vec3 scene(vec2 p, float t, vec4 P0, vec4 P1, vec4 P2, vec3 pal[5]) {
     float sym = P0.x, warp = P0.y, scale = P0.z, spiral = P0.w;
-    float bands = P1.x, mode = P1.y, crinkle = P1.z, palC = P1.w;
-    vec3 palD = P2.xyz;
-    float hue = t * P2.w;
+    float bands = P1.x, mode = P1.y, crinkle = P1.z;
+    float hue = t * P2.w * uHueMul;
 
     float r = length(p);
     float a = atan(p.y, p.x) + t * 0.03;
@@ -82,7 +99,8 @@
       float seg = 6.2831853 / sym;
       a = abs(mod(a, seg) - seg * 0.5);
     }
-    vec2 k = r * vec2(cos(a), sin(a));
+    vec2 dir = vec2(cos(a), sin(a));
+    vec2 k = r * dir;
 
     // Domain-warped noise: the "liquid".
     vec2 q = k * scale;
@@ -91,43 +109,39 @@
                    fbm(q + warp * w1 + vec2(8.3, 2.8) - t * 0.06));
     float f = fbm(q + warp * w2);
 
-    // Tie-dye: spiral bands that bleed along radial fabric creases.
-    float n = noise(vec2(a * 24.0, r * 5.0 - t * 0.2));
+    // Tie-dye: spiral bands of pure palette colour that bleed along creases.
+    float n = noise(dir * 3.8 + vec2(r * 5.0 - t * 0.2, r * 3.0));
     float s = a / 6.2831853 + spiral * log(r + 0.08)
             + 0.3 * warp * (f - 0.5) + crinkle * 0.18 * (n - 0.5) - t * 0.02;
     float b = s * bands;
     float bi = floor(b), bf = fract(b);
-    vec3 dye = mix(pal(bi / bands + hue, palC, palD),
-                   pal((bi + 1.0) / bands + hue, palC, palD),
+    vec3 dye = mix(grad(pal, (bi + 0.5) / 5.0 + hue, 0.08),
+                   grad(pal, (bi + 1.5) / 5.0 + hue, 0.08),
                    smoothstep(0.6, 1.0, bf));
     dye *= mix(1.0, 0.55, smoothstep(0.78, 0.97, bf));       // dye pools at the edge
     float gap = 1.0 - smoothstep(0.0, 0.05 + 0.08 * n, bf);  // undyed tie lines
-    dye = mix(dye, vec3(0.97, 0.92, 0.82), gap * 0.7 * crinkle);
-    dye = mix(dye, dye * dye * 1.4, 0.35 * f);
+    dye = mix(dye, vec3(0.97, 0.93, 0.85), gap * 0.6 * crinkle);
+    dye = mix(dye, dye * dye * 1.4, 0.3 * f);
 
-    // Oil projection: saturated blobs, inky membranes, thin-film shimmer.
+    // Oil projection: palette blobs, inky membranes, thin-film shimmer.
     float v = f + 0.6 * length(w1 - 0.5);
-    vec3 oil = pal(v * 1.6 + hue, palC, palD + 0.15);
+    vec3 oil = grad(pal, v * 1.3 + hue, 0.45);
     float d = abs(fract(v * 4.0 - t * 0.05) - 0.5);
     float line = smoothstep(0.40, 0.48, d);
-    vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (v * 7.0 + vec3(0.0, 0.33, 0.67)));
-    oil *= 0.5 + 0.75 * smoothstep(0.25, 0.75, f);
-    oil += irid * 0.35 * smoothstep(0.28, 0.40, d) * (1.0 - line);
+    vec3 irid = grad(pal, v * 5.0 + 0.4, 0.4);
+    oil *= 0.55 + 0.7 * smoothstep(0.25, 0.75, f);
+    oil += irid * 0.4 * smoothstep(0.28, 0.40, d) * (1.0 - line);
     oil *= 1.0 - 0.85 * line;
-    float ol = dot(oil, vec3(0.299, 0.587, 0.114));
-    oil = mix(vec3(ol), oil, 1.6) * 1.1;                      // projector-bright dyes
+    oil = mix(vec3(lum(oil)), oil, 1.2);
 
-    vec3 col = mix(dye, oil, mode);
-    float l = dot(col, vec3(0.299, 0.587, 0.114));
-    return clamp(mix(vec3(l), col, 1.35), 0.0, 1.2);
+    return clamp(mix(dye, oil, mode), 0.0, 1.2);
   }
 
   vec3 hueRotate(vec3 c, float h) {
     const mat3 toYIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
     const mat3 toRGB = mat3(1.0, 1.0, 1.0, 0.956, -0.272, -1.106, 0.621, -0.647, 1.703);
     vec3 y = toYIQ * c;
-    float cs = cos(h), sn = sin(h);
-    y.yz = mat2(cs, sn, -sn, cs) * y.yz;
+    y.yz = rot(y.yz, h);
     return toRGB * y;
   }
 
@@ -135,27 +149,95 @@
     vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
     float t = uTime;
 
-    float breath = 0.5 + 0.5 * sin(t * 0.5);   // slow in-and-out, ~12s
-    vec2 sp = p * (1.0 + 0.08 * breath);
-    vec3 s = scene(sp, t, uA0, uA1, uA2);
-    if (uMix > 0.001) s = mix(s, scene(sp, t, uB0, uB1, uB2), uMix);
+    // Cursor lens: bulge + ripples like a fingertip in the oil.
+    vec2 md = p - uMouse;
+    float mr = length(md);
+    vec2 mdir = md / (mr + 1e-4);
+    float near = exp(-mr * mr * 6.0) * uPresence;
+    vec2 lp = uMouse + md * (1.0 - 0.35 * near);
+    lp += mdir * sin(mr * 40.0 - uClock * 4.0) * 0.022 * near;
 
-    // Where to pull the previous frame from: zoom + twist + curl-noise flow,
-    // so old colour streams outward and swirls like oil on water.
+    float breath = 0.5 + 0.5 * sin(t * 0.5);   // slow in-and-out, ~12s
+    vec2 sp = (lp - uCenter) * (1.0 + 0.08 * breath);
+    vec3 s = scene(sp, t, uA0, uA1, uA2, uPalA);
+    if (uMix > 0.001) s = mix(s, scene(sp, t, uB0, uB1, uB2, uPalB), uMix);
+
+    // ---- Flow patterns: where each pixel pulls last frame's paint from ----
+    float F = uFlow;
+    vec2 q = p - uCenter;
     vec2 np = p * 1.5 + t * 0.05;
     float e = 0.02, n0 = noise(np);
-    vec2 g = vec2(noise(np + vec2(e, 0.0)) - n0, noise(np + vec2(0.0, e)) - n0) / e;
-    vec2 fp = p * (1.0 - 0.005 * uFlow);
-    float ra = 0.0015 * uFlow;
-    fp = mat2(cos(ra), sin(ra), -sin(ra), cos(ra)) * fp;
-    fp += vec2(g.y, -g.x) * 0.002 * uFlow;
-    vec2 md = p - uMouse;
-    fp -= uMouseVel * exp(-dot(md, md) * 14.0);   // stir with the pointer
+    vec2 curl = vec2(noise(np + vec2(0.0, e)) - n0, -(noise(np + vec2(e, 0.0)) - n0)) / e;
+    vec2 off = vec2(0.0);
+    // 0 bloom: outward from the centre
+    off += uFlowW[0] * (rot(q * (1.0 - 0.005 * F), 0.0015 * F) - q + curl * 0.002 * F);
+    // 1 tunnel: inward, counter-twisting
+    off += uFlowW[1] * (rot(q * (1.0 + 0.006 * F), -0.003 * F) - q + curl * 0.002 * F);
+    // 2 drip: paint runs down in uneven streaks
+    float dn = noise(vec2(p.x * 9.0, t * 0.15));
+    off += uFlowW[2] * (vec2(0.0008 * sin(p.y * 8.0 + t), 0.002 + 0.009 * dn * dn) + curl * 0.001) * F;
+    // 3 twin vortex: two whirlpools circling each other
+    vec2 v1 = 0.45 * vec2(cos(t * 0.1), 0.6 * sin(t * 0.13));
+    vec2 d1 = q - v1, d2 = q + v1;
+    off += uFlowW[3] * (rot(d1, 0.03 * F * exp(-dot(d1, d1) * 5.0)) - d1
+                      + rot(d2, -0.03 * F * exp(-dot(d2, d2) * 5.0)) - d2 + curl * 0.0015 * F);
+    // 4 marble: sideways curl-noise currents
+    off += uFlowW[4] * (curl * 0.007 + vec2(0.0015, 0.0)) * F;
+    // 5 galaxy: tight spiral arms
+    off += uFlowW[5] * (rot(q * (1.0 - 0.003 * F), (0.012 * exp(-dot(q, q) * 1.5) + 0.002) * F) - q);
+    vec2 fp = p + off;
+
+    // Whirlpool under the cursor (always on, stronger while holding).
+    float cf = min(F * F, 1.5);             // follows the Flow slider (squared: fades out fast)
+    float vort = (0.02 + 0.03 * uHold) * near * cf;
+    vec2 rel = (fp - uMouse) * (1.0 - (0.006 + 0.006 * uHold) * near * cf);
+    fp = uMouse + rot(rel, vort);
+    fp -= uMouseVel * exp(-mr * mr * 8.0);   // drag the paint with the pointer
+
+    // Splash shockwaves push old paint outward.
+    for (int i = 0; i < 8; i++) {
+      vec4 D = uDrops[i];
+      if (D.z > 4.0) continue;
+      vec2 dv = p - D.xy;
+      float dl = length(dv);
+      float ring = exp(-pow((dl - D.z * 0.5) * 18.0, 2.0)) * exp(-D.z * 1.5);
+      fp -= dv / (dl + 1e-4) * ring * 0.012;
+    }
 
     vec2 fuv = vec2(fp.x * uRes.y / uRes.x, fp.y) + 0.5;
     vec3 prev = hueRotate(texture(uPrev, fuv).rgb, uDrift);
+
+    float boost = uFlowW[1] * 0.2 + uFlowW[2] * 0.75 + uFlowW[3] * 0.4 + uFlowW[4] * 0.55 + uFlowW[5] * 0.3;
     float m = uMelt * (0.88 + 0.12 * noise(p * 2.0 - t * 0.1));
-    outColor = vec4(clamp(mix(s, prev, m), 0.0, 1.5), 1.0);
+    m = max(m, mix(m, 0.985, boost * smoothstep(0.3, 0.7, noise(p * 1.3 + t * 0.04))));
+    m = max(m, mix(m, 0.97, near * 0.7));     // cursor swirls linger
+    vec3 col = mix(s, prev, m);
+
+    // Splashes: a blob with a ragged crown, flung droplets and a bright ring.
+    for (int i = 0; i < 8; i++) {
+      vec4 D = uDrops[i];
+      if (D.z > 4.0) continue;
+      float age = D.z;
+      vec2 dv = p - D.xy;
+      float dl = length(dv);
+      vec3 c = ink(D.w) * 1.15;
+      float rad = (0.02 + 0.08 * (1.0 - exp(-age * 5.0))) * (0.7 + 0.6 * noise(dv / (dl + 1e-4) * 2.5 + D.w * 50.0));
+      float blob = (1.0 - smoothstep(rad - 0.012, rad, dl)) * exp(-age * 3.0);
+      col = mix(col, c, blob * 0.55);
+      float ring = exp(-pow((dl - age * 0.5) * 22.0, 2.0)) * exp(-age * 2.0);
+      col += ink(D.w + 0.4) * ring * 0.2;
+      for (int j = 0; j < 3; j++) {
+        float fj = float(j);
+        float aj = D.w * 40.0 + fj * 1.37 + fj * fj * 0.31;
+        float dj = (0.06 + 0.06 * fract(D.w * 13.0 + fj * 0.618)) * (1.0 - exp(-age * 6.0));
+        vec2 sat = D.xy + dj * vec2(cos(aj), sin(aj));
+        float sr = 0.01 * (0.6 + 0.8 * fract(D.w * 7.0 + fj * 0.37)) * exp(-age * 1.5);
+        float drop = 1.0 - smoothstep(sr * 0.4, sr, length(p - sat));
+        col = mix(col, c, drop * 0.6 * exp(-age * 2.5));
+      }
+    }
+
+    outColor = vec4(clamp(col, 0.0, 1.5), 1.0);
   }`;
 
   const POST = COMMON + `
@@ -170,6 +252,19 @@
     // Chromatic fringing, stronger toward the edges (that 60s "vibrating" look).
     vec2 off = c * (0.004 + 0.02 * dot(c, c));
     vec3 col = vec3(texture(uTex, uv - off).r, texture(uTex, uv).g, texture(uTex, uv + off).b);
+
+    // Wet paint: treat brightness as height, light it, add glossy highlights.
+    vec2 tx = 1.5 / uRes;
+    float hL = lum(texture(uTex, uv - vec2(tx.x, 0.0)).rgb);
+    float hR = lum(texture(uTex, uv + vec2(tx.x, 0.0)).rgb);
+    float hD = lum(texture(uTex, uv - vec2(0.0, tx.y)).rgb);
+    float hU = lum(texture(uTex, uv + vec2(0.0, tx.y)).rgb);
+    vec3 N = normalize(vec3((hL - hR) * 4.0, (hD - hU) * 4.0, 1.0));
+    vec3 L = normalize(vec3(-0.5, 0.6, 0.8));
+    float shade = dot(N, L) / L.z;
+    col *= mix(1.0, shade, 0.3);
+    float spec = pow(max(dot(N, normalize(L + vec3(0.0, 0.0, 1.0))), 0.0), 48.0);
+    col += spec * 0.4 * vec3(1.0, 0.96, 0.9);
 
     // Cheap glow.
     vec3 glow = vec3(0.0);
@@ -211,7 +306,7 @@
     const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) {
       const name = gl.getActiveUniform(p, i).name;
-      u[name] = gl.getUniformLocation(p, name);
+      u[name.replace('[0]', '')] = gl.getUniformLocation(p, name);
     }
     return { p, u };
   }
@@ -262,86 +357,171 @@
     freeTarget(read); freeTarget(write);
     read = makeTarget(W, H);
     write = makeTarget(W, H);
-    if (paused) step(0, true);
+    if (paused) step(true);
+  }
+
+  // ---------- Palettes ----------
+  // Hand-picked 5-colour sets: each has a dark anchor, a mid and bright pops,
+  // ordered so neighbours blend cleanly (the gradient also wraps last→first).
+
+  const PALETTES = [
+    ['Fillmore',      '2b0f54', 'ab1f65', 'ff4f4f', 'ff9a3c', 'ffd23f'],
+    ['Neon candy',    '9b5de5', 'f15bb5', 'fee440', '00bbf9', '00f5d4'],
+    ['Tie-dye',       'a34dff', 'ff1f5a', 'ffb800', '3ddc84', '1e90ff'],
+    ['Violet ember',  '10002b', '3c096c', '9d4edd', 'ff6d00', 'ffba08'],
+    ['Lagoon',        '012a4a', '01497c', '2a9d8f', 'e9c46a', 'f4a261'],
+    ['Wildfire',      '370617', '9d0208', 'e85d04', 'faa307', 'ffdd55'],
+    ['Acid',          '1b0c3d', '7a1fa2', 'ff4ecd', 'c6ff00', '3ddc97'],
+    ['Cosmic',        '03071e', '3a0ca3', '4361ee', '4cc9f0', 'f72585'],
+    ['Electric',      '2d00f7', '8900f2', 'db00b6', 'ff4d6d', 'ffb703'],
+    ['Mango',         '3d0c11', 'd1495b', 'edae49', '00798c', '30638e'],
+    ['Dream',         '6a4c93', 'ff99c8', 'fcf6bd', 'a9def9', '1982c4'],
+    ['Synthwave',     '0d0221', '541388', 'f72585', 'ff8500', '2de2e6'],
+    ['Garden',        '073b4c', '118ab2', '06d6a0', 'ffd166', 'ef476f'],
+    ['Aurora',        '001219', '0a9396', '94d2bd', 'ee9b00', 'ae2012'],
+    ['Rose quartz',   '2a0a29', '7b1e5a', 'e05297', 'ffb3c6', 'ffe5ec'],
+    ['Deep jungle',   '081c15', '1b4332', '52b788', 'd8f3dc', 'ff7b54'],
+  ].map(([name, ...hex]) => ({
+    name,
+    rgb: new Float32Array(hex.flatMap((h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255))),
+  }));
+
+  // ---------- Flow patterns ----------
+
+  const PATTERNS = ['Bloom', 'Tunnel', 'Drip', 'Twin vortex', 'Marble', 'Galaxy'];
+  let patternChoice = -1;           // -1 = auto (changes with each vibe)
+  let activePattern = 0;
+  const flowW = new Float32Array([1, 0, 0, 0, 0, 0]);
+
+  function autoPattern() {
+    // Mostly the classic outward bloom, sometimes something else.
+    return Math.random() < 0.45 ? 0 : 1 + Math.floor(Math.random() * (PATTERNS.length - 1));
   }
 
   // ---------- Scenes ("vibes") ----------
-  // 12 numbers: sym, warp, scale, spiral | bands, mode, crinkle, palC | palD.rgb, hueSpeed
+  // p: sym, warp, scale, spiral | bands, mode, crinkle, - | -, -, -, hueSpeed
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-  const PALETTES = [
-    [0.0, 0.33, 0.67],   // classic rainbow tie-dye
-    [0.0, 0.1, 0.2],     // fire: red, orange, gold
-    [0.5, 0.2, 0.25],    // magenta / teal
-    [0.8, 0.9, 0.3],     // acid lime / violet
-    [0.3, 0.2, 0.2],     // blood orange / turquoise
-  ];
 
-  function randomScene() {
+  function randomScene(prev) {
     const m = Math.random();
     const mode = m < 0.4 ? rand(0, 0.15) : m < 0.8 ? rand(0.85, 1) : rand(0.3, 0.7);
-    const d = Math.random() < 0.6 ? pick(PALETTES) : [Math.random(), Math.random(), Math.random()];
-    return [
-      pick([0, 0, 3, 4, 5, 6, 6, 8, 10, 12]), rand(1, 3.5), rand(0.8, 2.2), rand(-1.8, 1.8),
-      Math.floor(rand(3, 9)), mode, rand(0.3, 1), Math.floor(rand(1, 4)),
-      d[0], d[1], d[2], rand(0.01, 0.05) * (Math.random() < 0.5 ? -1 : 1),
-    ];
+    const sym = pick([0, 0, 3, 4, 5, 6, 6, 8, 10, 12]);
+    // Without a kaleidoscope, band counts must be multiples of 5 to avoid a seam.
+    const bands = sym === 0 ? pick([5, 10]) : Math.floor(rand(3, 9));
+    let pal;
+    do { pal = Math.floor(Math.random() * PALETTES.length); } while (prev && pal === prev.pal);
+    const pattern = patternChoice >= 0 ? patternChoice : autoPattern();
+    return {
+      p: [sym, rand(1, 3.5), rand(0.8, 2.2), rand(-1.8, 1.8),
+          bands, mode, rand(0.3, 1), 0,
+          0, 0, 0, rand(0.01, 0.04) * (Math.random() < 0.5 ? -1 : 1)],
+      pal,
+      pattern,
+      // How far the centre wanders: the bloom often stays put, others roam.
+      wander: pattern === 0 && Math.random() < 0.5 ? 0 : rand(0.4, 1),
+    };
   }
 
-  let sceneA = randomScene(), sceneB = null;
+  let sceneA = randomScene(null), sceneB = null;
   let holdT = 0, fadeT = 0;
+  let wander = sceneA.wander;
+  activePattern = sceneA.pattern;
 
   function nextVibe() {
-    if (sceneB) { if (fadeT > 0.5) sceneA = sceneB; }
-    sceneB = randomScene();
+    if (sceneB && fadeT > 0.5) sceneA = sceneB;
+    sceneB = randomScene(sceneA);
+    activePattern = sceneB.pattern;
     fadeT = 0; holdT = 0;
   }
 
-  // ---------- Pointer stirring ----------
+  // ---------- Pointer: stir, splash, pour ----------
 
   const mouse = [10, 10];
   let pendingVel = [0, 0], mouseVel = [0, 0];
+  let presence = 0, presenceTarget = 0;   // fades the cursor effect in/out
+  let holding = false, hold = 0, pourT = 0;
+  let cursorFx = true;                    // stir / splash / pour enabled
+  const drops = [];                       // {x, y, age, seed}
+  const dropData = new Float32Array(32);
+
   function toScene(e) {
     return [(e.clientX - window.innerWidth / 2) / window.innerHeight,
             -(e.clientY - window.innerHeight / 2) / window.innerHeight];
   }
-  window.addEventListener('pointermove', (e) => {
+  function trackPointer(e) {
     const p = toScene(e);
-    if (mouse[0] < 5) { pendingVel[0] += p[0] - mouse[0]; pendingVel[1] += p[1] - mouse[1]; }
+    if (cursorFx && mouse[0] < 5) { pendingVel[0] += p[0] - mouse[0]; pendingVel[1] += p[1] - mouse[1]; }
     mouse[0] = p[0]; mouse[1] = p[1];
+    presenceTarget = cursorFx ? 1 : 0;
+  }
+  function addDrop() {
+    drops.push({ x: mouse[0], y: mouse[1], age: 0, seed: Math.random() });
+    if (drops.length > 8) drops.shift();
+  }
+
+  window.addEventListener('pointermove', trackPointer);
+  canvas.addEventListener('pointerdown', (e) => {
+    if (mouse[0] > 5) pendingVel = [0, 0];
+    trackPointer(e);
+    if (!cursorFx) return;
+    holding = true; pourT = 0;
+    addDrop();
   });
+  window.addEventListener('pointerup', () => { holding = false; });
+  window.addEventListener('pointercancel', () => { holding = false; });
+  document.addEventListener('mouseout', (e) => { if (!e.relatedTarget) presenceTarget = 0; });
+  window.addEventListener('blur', () => { presenceTarget = 0; holding = false; });
 
   // ---------- Loop ----------
 
-  let time = Math.random() * 100;
+  let time = Math.random() * 100, clock = 0;
   let paused = false;
+  const center = [0, 0];
 
-  function setScene(prefix, s) {
+  function setScene(prefix, sc) {
+    const s = sc.p;
     gl.uniform4f(sim.u[prefix + '0'], s[0], s[1], s[2], s[3]);
     gl.uniform4f(sim.u[prefix + '1'], s[4], s[5], s[6], s[7]);
     gl.uniform4f(sim.u[prefix + '2'], s[8], s[9], s[10], s[11]);
   }
 
-  function step(dt, fresh) {
+  function step(fresh) {
     const mix = sceneB ? fadeT * fadeT * (3 - 2 * fadeT) : 0;
+    const B = sceneB || sceneA;
+
+    for (let i = 0; i < 8; i++) {
+      const d = drops[i];
+      dropData.set(d ? [d.x, d.y, d.age, d.seed] : [0, 0, 99, 0], i * 4);
+    }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, write.fbo);
     gl.viewport(0, 0, W, H);
     gl.useProgram(sim.p);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, read.tex);
-    gl.uniform1i(sim.u.uPrev, 0);
-    gl.uniform2f(sim.u.uRes, W, H);
-    gl.uniform1f(sim.u.uTime, time);
-    gl.uniform1f(sim.u.uMelt, fresh ? 0 : settings.melt);
-    gl.uniform1f(sim.u.uDrift, settings.drift);
-    gl.uniform1f(sim.u.uFlow, settings.flow);
-    gl.uniform1f(sim.u.uMix, mix);
-    gl.uniform2f(sim.u.uMouse, mouse[0], mouse[1]);
-    gl.uniform2f(sim.u.uMouseVel, mouseVel[0], mouseVel[1]);
+    const u = sim.u;
+    gl.uniform1i(u.uPrev, 0);
+    gl.uniform2f(u.uRes, W, H);
+    gl.uniform1f(u.uTime, time);
+    gl.uniform1f(u.uClock, clock);
+    gl.uniform1f(u.uMelt, fresh ? 0 : settings.melt);
+    gl.uniform1f(u.uDrift, 0.003 * settings.cycle);
+    gl.uniform1f(u.uHueMul, settings.cycle);
+    gl.uniform1f(u.uFlow, settings.flow);
+    gl.uniform1f(u.uMix, mix);
+    gl.uniform2f(u.uMouse, mouse[0], mouse[1]);
+    gl.uniform2f(u.uMouseVel, mouseVel[0], mouseVel[1]);
+    gl.uniform2f(u.uCenter, center[0], center[1]);
+    gl.uniform1f(u.uPresence, presence);
+    gl.uniform1f(u.uHold, hold);
     setScene('uA', sceneA);
-    setScene('uB', sceneB || sceneA);
+    setScene('uB', B);
+    gl.uniform3fv(u.uPalA, PALETTES[sceneA.pal].rgb);
+    gl.uniform3fv(u.uPalB, PALETTES[B.pal].rgb);
+    gl.uniform1fv(u.uFlowW, flowW);
+    gl.uniform4fv(u.uDrops, dropData);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     [read, write] = [write, read];
 
@@ -367,33 +547,86 @@
     }
   }
 
+  function update(dt) {
+    time += dt * settings.flow;
+    clock += dt;
+
+    if (sceneB) {
+      fadeT += dt / Math.min(settings.fadeSeconds, Math.max(3, settings.holdSeconds * 0.6));
+      if (fadeT >= 1) { sceneA = sceneB; sceneB = null; fadeT = 0; holdT = 0; }
+    } else {
+      holdT += dt;
+      if (holdT > settings.holdSeconds) nextVibe();
+    }
+
+    // Ease between flow patterns and centre wander.
+    const ease = Math.min(1, dt * 0.6);
+    for (let i = 0; i < flowW.length; i++) flowW[i] += ((i === activePattern ? 1 : 0) - flowW[i]) * ease;
+    wander += ((sceneB || sceneA).wander - wander) * ease;
+    center[0] = wander * 0.35 * Math.sin(time * 0.11 + 1.3);
+    center[1] = wander * 0.22 * Math.sin(time * 0.083 + 0.4);
+
+    // Smooth the pointer's motion over a few frames: mouse events arrive
+    // unevenly, which made slow drags look jerky.
+    const k = 0.25;
+    mouseVel = [mouseVel[0] * (1 - k) + pendingVel[0] * 0.8 * k,
+                mouseVel[1] * (1 - k) + pendingVel[1] * 0.8 * k];
+    pendingVel = [0, 0];
+    presence += (presenceTarget - presence) * Math.min(1, dt * 2);
+    hold += ((holding ? 1 : 0) - hold) * Math.min(1, dt * 4);
+
+    // Holding the button pours a stream of splashes.
+    if (holding) {
+      pourT += dt;
+      if (pourT > 0.25) { pourT = 0; addDrop(); }
+    }
+    for (const d of drops) d.age += dt;
+    while (drops.length && drops[0].age > 4) drops.shift();
+  }
+
   let last = performance.now();
   function frame(now) {
     const rawDt = (now - last) / 1000;
     last = now;
-    const dt = Math.min(0.1, rawDt);
     if (!paused) {
       if (rawDt < 0.1) adapt(rawDt);
-      time += dt * settings.flow;
-      if (sceneB) {
-        fadeT += dt / settings.fadeSeconds;
-        if (fadeT >= 1) { sceneA = sceneB; sceneB = null; fadeT = 0; holdT = 0; }
-      } else {
-        holdT += dt;
-        if (holdT > settings.holdSeconds) nextVibe();
-      }
-      mouseVel = [pendingVel[0] * 0.6, pendingVel[1] * 0.6];
-      pendingVel = [0, 0];
-      step(dt, false);
+      update(Math.min(0.1, rawDt));
+      step(false);
     }
     requestAnimationFrame(frame);
   }
 
   // ---------- Controls ----------
 
+  let flashTimer = 0;
+  function flash(msg) {
+    const el = document.getElementById('flash');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => el.classList.remove('show'), 1500);
+  }
+
   function setPaused(on) {
     paused = on;
     document.getElementById('btn-dream').textContent = on ? 'Flow ▶' : 'Pause ❚❚';
+  }
+  function toggleCursor() {
+    cursorFx = !cursorFx;
+    if (!cursorFx) { presenceTarget = 0; holding = false; pendingVel = [0, 0]; }
+    document.getElementById('btn-cursor').textContent = `Cursor: ${cursorFx ? 'On' : 'Off'}`;
+    flash(cursorFx ? 'Cursor effects on' : 'Cursor effects off');
+  }
+  function cyclePattern() {
+    patternChoice = patternChoice + 1 >= PATTERNS.length ? -1 : patternChoice + 1;
+    const label = patternChoice < 0 ? 'Auto' : PATTERNS[patternChoice];
+    if (patternChoice >= 0) activePattern = patternChoice;
+    document.getElementById('btn-pattern').textContent = `Pattern: ${label}`;
+    flash(patternChoice < 0 ? 'Pattern: Auto (changes with each vibe)' : `Pattern: ${label}`);
+  }
+  function newVibe() {
+    nextVibe();
+    flash(`${PALETTES[sceneB.pal].name} · ${PATTERNS[activePattern]}`);
   }
   function savePng() {
     canvas.toBlob((blob) => {
@@ -405,7 +638,9 @@
     });
   }
 
-  document.getElementById('btn-new').onclick = nextVibe;
+  document.getElementById('btn-new').onclick = newVibe;
+  document.getElementById('btn-pattern').onclick = cyclePattern;
+  document.getElementById('btn-cursor').onclick = toggleCursor;
   document.getElementById('btn-dream').onclick = () => setPaused(!paused);
   document.getElementById('btn-save').onclick = savePng;
   document.getElementById('btn-full').onclick = () => {
@@ -420,14 +655,29 @@
   }
   bindSlider('sl-flow', 'flow');
   bindSlider('sl-melt', 'melt');
-  bindSlider('sl-drift', 'drift');
+  bindSlider('sl-cycle', 'cycle');
+
+  // How long each design stays before morphing to the next (far right = never).
+  const holdEl = document.getElementById('sl-hold');
+  const holdVal = document.getElementById('hold-val');
+  function setHold() {
+    const v = parseFloat(holdEl.value);
+    const never = v >= parseFloat(holdEl.max);
+    settings.holdSeconds = never ? Infinity : v;
+    holdVal.textContent = never ? 'never' : v < 60 ? `${v}s` : `${Math.floor(v / 60)}m${v % 60 ? ` ${v % 60}s` : ''}`;
+  }
+  holdEl.value = settings.holdSeconds;
+  holdEl.oninput = setHold;
+  setHold();
 
   const ui = document.getElementById('ui');
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     switch (e.key.toLowerCase()) {
       case ' ': e.preventDefault(); setPaused(!paused); break;
-      case 'n': nextVibe(); break;
+      case 'n': newVibe(); break;
+      case 'p': cyclePattern(); break;
+      case 'c': toggleCursor(); break;
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
       case 'h': ui.classList.toggle('hidden'); break;
