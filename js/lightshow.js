@@ -401,6 +401,7 @@
   // ---------- Scenes ("vibes") ----------
   // p: sym, warp, scale, spiral | bands, mode, crinkle, - | -, -, -, hueSpeed
 
+  let lockedPal = -1;               // >= 0: colour lock on, keep this palette
   const rand = (a, b) => a + Math.random() * (b - a);
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -410,8 +411,10 @@
     const sym = pick([0, 0, 3, 4, 5, 6, 6, 8, 10, 12]);
     // Without a kaleidoscope, band counts must be multiples of 5 to avoid a seam.
     const bands = sym === 0 ? pick([5, 10]) : Math.floor(rand(3, 9));
-    let pal;
-    do { pal = Math.floor(Math.random() * PALETTES.length); } while (prev && pal === prev.pal);
+    let pal = lockedPal;
+    if (pal < 0) {
+      do { pal = Math.floor(Math.random() * PALETTES.length); } while (prev && pal === prev.pal);
+    }
     const pattern = patternChoice >= 0 ? patternChoice : autoPattern();
     return {
       p: [sym, rand(1, 3.5), rand(0.8, 2.2), rand(-1.8, 1.8),
@@ -617,6 +620,19 @@
     document.getElementById('btn-cursor').textContent = `Cursor: ${cursorFx ? 'On' : 'Off'}`;
     flash(cursorFx ? 'Cursor effects on' : 'Cursor effects off');
   }
+  function toggleColorLock() {
+    if (lockedPal >= 0) {
+      lockedPal = -1;
+      flash('Colors free');
+    } else {
+      // Lock whatever is (mostly) on screen; stop a fade into other colours.
+      lockedPal = (sceneB && fadeT > 0.5 ? sceneB : sceneA).pal;
+      sceneA.pal = lockedPal;
+      if (sceneB) sceneB.pal = lockedPal;
+      flash(`Colors locked: ${PALETTES[lockedPal].name}`);
+    }
+    document.getElementById('btn-lock').textContent = `Colors: ${lockedPal >= 0 ? 'Locked' : 'Free'}`;
+  }
   function cyclePattern() {
     patternChoice = patternChoice + 1 >= PATTERNS.length ? -1 : patternChoice + 1;
     const label = patternChoice < 0 ? 'Auto' : PATTERNS[patternChoice];
@@ -641,6 +657,7 @@
   document.getElementById('btn-new').onclick = newVibe;
   document.getElementById('btn-pattern').onclick = cyclePattern;
   document.getElementById('btn-cursor').onclick = toggleCursor;
+  document.getElementById('btn-lock').onclick = toggleColorLock;
   document.getElementById('btn-dream').onclick = () => setPaused(!paused);
   document.getElementById('btn-save').onclick = savePng;
   document.getElementById('btn-full').onclick = () => {
@@ -677,6 +694,7 @@
       case 'n': newVibe(); break;
       case 'p': cyclePattern(); break;
       case 'c': toggleCursor(); break;
+      case 'l': toggleColorLock(); break;
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
       case 'h': ui.classList.toggle('hidden'); break;
