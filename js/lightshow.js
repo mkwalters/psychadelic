@@ -19,6 +19,7 @@
     flow: 0.57,     // overall speed (slider starts ~25% along)
     melt: 0.62,     // feedback amount (trail length; slider starts ~25% along)
     cycle: 1,       // colour cycling speed
+    geo: 0.15,      // Geometry slider: 0 loose/liquid → 1 sharp/intricate
     holdSeconds: 6,
     fadeSeconds: 9,
   };
@@ -69,7 +70,7 @@
   uniform vec2 uRes;
   uniform float uTime, uClock, uMelt, uDrift, uFlow, uMix, uHueMul;
   uniform vec2 uMouse, uMouseVel, uCenter;
-  uniform float uPresence, uHold;
+  uniform float uPresence, uHold, uGeo;
   uniform vec4 uA0, uA1, uA2, uB0, uB1, uB2;
   uniform vec3 uPalA[5], uPalB[5];
   uniform float uFlowW[6];
@@ -88,12 +89,167 @@
     return mix(grad(uPalA, t, 0.25), grad(uPalB, t, 0.25), uMix);
   }
 
+  // ---- Geometry layer: five fractal / sacred-geometry families ----
+  // Each returns vec4(outline distance, filigree distance, cell colour index,
+  // glow) with distances in screen units so lines stay pixel-crisp.
+
+  // 0: Stained glass: kaleidoscopic fold-rotate-scale iterations (KIFS).
+  vec4 famKifs(vec2 z, float t, float seed) {
+    z *= 3.0;
+    vec2 off = vec2(0.9 + 0.25 * sin(t * 0.09 + seed * 6.0), 0.45 + 0.2 * cos(t * 0.07 + seed * 9.0));
+    float ang = 0.45 + 0.35 * sin(t * 0.05 + seed * 12.0);
+    float k = 3.0, tr = 1e5, tl = 1e5, idx = 0.0;
+    for (int i = 0; i < 5; i++) {
+      z = abs(z) - off;
+      z = rot(z, ang);
+      z *= 1.45; k *= 1.45;
+      float dr = abs(length(z) - 0.7) / k;
+      if (dr < tr) { tr = dr; idx = float(i); }
+      tl = min(tl, abs(z.y) / k);
+    }
+    return vec4(tr, tl, idx * 0.2 + tr * 6.0, exp(-tr * 40.0));
+  }
+
+  // 1: Apollonian circle packing: repeated tiling + circle inversion.
+  vec4 famApollo(vec2 z, float t, float seed) {
+    float S = 2.2 + 0.4 * sin(t * 0.05 + seed * 9.0);
+    z *= S;
+    z.x += 0.3 * sin(t * 0.03 + seed * 4.0);
+    float sc = S, tr = 1e5;
+    float kk = 1.15 + 0.1 * sin(t * 0.07 + seed * 13.0);
+    for (int i = 0; i < 6; i++) {
+      z = -1.0 + 2.0 * fract(0.5 * z + 0.5);
+      float k = kk / max(dot(z, z), 1e-5);
+      z *= k; sc *= k;
+      tr = min(tr, abs(length(z) - 0.5) / sc);
+    }
+    float de = 0.25 * abs(z.y) / sc;
+    float lv = min(log(sc / S), 4.0);
+    return vec4(tr, de * 2.0, floor(lv * 1.2) * 0.2 + 0.1, 0.75 + 0.45 * exp(-tr * 150.0) - 0.08 * lv);
+  }
+
+  // 2: Hyperbolic {p,q} tiling of the Poincare disk (Escher's "Circle Limit"),
+  // drifting with a slow hyperbolic translation.
+  const float PS[9] = float[9](7.0, 8.0, 5.0, 6.0, 4.0, 4.0, 3.0, 3.0, 5.0);
+  const float QS[9] = float[9](3.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0, 5.0);
+  vec4 famHyper(vec2 p, float t, float seed, float Rd) {
+    int pi = int(fract(seed * 7.13) * 9.0);
+    float A = 3.14159265 / PS[pi], B = 3.14159265 / QS[pi];
+    vec2 z = p / Rd;
+    if (dot(z, z) >= 0.995) return vec4(1e5, 1e5, 0.0, 0.6);
+    float wa = t * 0.05 + seed * 6.0, wr = 0.25 * sin(t * 0.03 + seed * 3.0);
+    vec2 w = wr * vec2(cos(wa), sin(wa));
+    vec2 num = z - w;
+    vec2 den = vec2(1.0 - dot(w, z), -(w.x * z.y - w.y * z.x));
+    z = vec2(num.x * den.x + num.y * den.y, num.y * den.x - num.x * den.y) / dot(den, den);
+    float sa = sin(A), cb = cos(B);
+    float d = 1.0 / sqrt(1.0 - sa * sa / (cb * cb)), r = d * sa / cb;
+    float m = 1.0 / Rd, cnt = 0.0;
+    for (int i = 0; i < 40; i++) {
+      float a = atan(z.y, z.x), rr = length(z), seg = 2.0 * A;
+      a = mod(a, seg);
+      if (a > A) { a = seg - a; cnt += 1.0; }
+      z = rr * vec2(cos(a), sin(a));
+      vec2 e = z - vec2(d, 0.0);
+      float e2 = dot(e, e);
+      if (e2 < r * r) { float f = r * r / e2; z = vec2(d, 0.0) + e * f; m *= f; cnt += 1.0; }
+      else break;
+    }
+    float dm = min(abs(length(z - vec2(d, 0.0)) - r), abs(z.x * sin(A) - z.y * cos(A)));
+    return vec4(dm / m, abs(z.y) / m,
+                mod(cnt, 2.0) * 0.2 + mod(floor(cnt / 2.0), 3.0) * 0.4 + 0.05,
+                0.7 + 0.5 * exp(-dm * 6.0));
+  }
+
+  // 3: Flower of life: a hex lattice of overlapping circles.
+  vec4 famFlower(vec2 p, float t, float seed) {
+    float S = 5.0 + 3.0 * fract(seed * 7.7);
+    vec2 x = rot(p, t * 0.03) * S;
+    float v = x.y / 0.8660254, u = x.x - 0.5 * v;
+    float iu = floor(u), iv = floor(v);
+    float ld = 1e5, fd = 1e5, cover = 0.0;
+    float rad = 1.0 + 0.08 * sin(t * 0.2 + seed * 3.0);
+    for (int a = -1; a <= 2; a++) {
+      for (int b = -1; b <= 2; b++) {
+        float cv = iv + float(b);
+        vec2 c = vec2(iu + float(a) + 0.5 * cv, cv * 0.8660254);
+        float d = length(x - c);
+        ld = min(ld, abs(d - rad));
+        fd = min(fd, abs(d - rad * 0.5));
+        if (d < rad) cover += 1.0;
+      }
+    }
+    return vec4(ld / S, fd / S, cover * 0.11 + length(p) * 0.6, 0.75 + 0.45 * exp(-ld * 8.0));
+  }
+
+  // 4: Droste: nested stars zooming endlessly into the centre.
+  vec4 famDroste(vec2 p, float t, float seed, float N) {
+    float r = max(length(p), 1e-4), K = 2.2;
+    float u = log(r) * K - t * 0.15;
+    float cell = floor(u), fu = u - cell;
+    float seg = 6.2831853 / N;
+    float a = atan(p.y, p.x) + cell * 0.35 + t * 0.03;
+    float af = abs(mod(a, seg) - seg * 0.5) / (seg * 0.5);
+    float sharp = 0.35 + 0.3 * fract(seed * 5.3);
+    float rs = 0.25 + 0.6 * pow(1.0 - af, 1.5) * sharp + 0.25 * (1.0 - sharp);
+    return vec4(abs(fu - rs) * r / K,
+                min(abs(fu - 0.08) * r / K, af * seg * 0.5 * r),
+                cell * 0.23 + fu * 0.25, exp(-abs(fu - rs) * 6.0));
+  }
+
+  vec3 mandala(vec2 p, float t, float sym, float seed, vec3 pal[5], float hue, vec3 base, float amt) {
+    int fam = min(int(seed * 5.0), 4);
+    float N = sym > 0.5 ? sym : 6.0 + 2.0 * floor(fract(seed * 3.7) * 3.0);
+
+    // Wide, organic border: et = 0 in the jewel, 1 out in the liquid.
+    float R = 0.25 + 0.5 * amt;
+    float et = smoothstep(R * 0.3, R * 1.15, length(p) + 0.08 * (fbm(p * 3.0 + vec2(t * 0.1, 0.0)) - 0.5));
+    if (et > 0.999) return base;   // fully dissolved: skip the fractal work
+    // Melt the geometry's own coordinates as it dissolves outward.
+    p += (vec2(noise(p * 3.0 + vec2(t * 0.1, 0.0)), noise(p * 3.0 + vec2(7.3, -t * 0.1))) - 0.5) * 0.25 * et;
+
+    float r = length(p);
+    float a = atan(p.y, p.x) - t * 0.04;
+    float seg = 6.2831853 / N;
+    a = abs(mod(a, seg) - seg * 0.5);
+    vec2 z = r * vec2(cos(a), sin(a));
+
+    float fa = 1.0;   // how much the family's cell colours fill in
+    vec4 T;
+    if (fam == 0) T = famKifs(z, t, seed);
+    else if (fam == 1) T = famApollo(z, t, seed);
+    else if (fam == 2) {
+      float Rd = R * 0.75;
+      T = famHyper(p, t, seed, Rd);
+      fa = 1.0 - smoothstep(0.8, 1.0, r / Rd);
+    }
+    else if (fam == 3) T = famFlower(p, t, seed);
+    else T = famDroste(p, t, seed, N);
+
+    // Lines blur and fade first, then the coloured cells melt away.
+    float w = (1.6 / uRes.y) * (1.0 + 3.0 * et);
+    float keep = (1.0 - et) * (1.0 - et);
+    float ringLine = (1.0 - smoothstep(w * 0.4, w * 1.2, T.x)) * keep;
+    float filLine = (1.0 - smoothstep(w * 0.3, w, T.y)) * keep;
+    vec3 fill = grad(pal, T.z + 0.1 + hue, 0.05) * (0.65 + 0.45 * min(T.w, 1.2));
+    vec3 hi = pal[0];
+    for (int i = 1; i < 5; i++) if (lum(pal[i]) > lum(hi)) hi = pal[i];
+    vec3 m = mix(base, fill, 0.7 * (1.0 - et) * fa);
+    m = mix(m, hi * 1.1, filLine * 0.6);
+    m = mix(m, vec3(0.02, 0.0, 0.04), ringLine * 0.7);
+    return mix(base, m, amt);
+  }
+
   vec3 scene(vec2 p, float t, vec4 P0, vec4 P1, vec4 P2, vec3 pal[5]) {
     float sym = P0.x, warp = P0.y, scale = P0.z, spiral = P0.w;
     float bands = P1.x, mode = P1.y, crinkle = P1.z;
     float hue = t * P2.w * uHueMul;
 
     float r = length(p);
+    // Geometry slider: calm the warp and sharpen edges, most near the centre.
+    float G = uGeo * (0.3 + 0.7 * exp(-r * r * 3.0));
+    warp *= 1.0 - 0.85 * G;
+    crinkle *= 1.0 - 0.7 * G;
     float a = atan(p.y, p.x) + t * 0.03;
     if (sym > 0.5) {               // kaleidoscope fold
       float seg = 6.2831853 / sym;
@@ -117,24 +273,27 @@
     float bi = floor(b), bf = fract(b);
     vec3 dye = mix(grad(pal, (bi + 0.5) / 5.0 + hue, 0.08),
                    grad(pal, (bi + 1.5) / 5.0 + hue, 0.08),
-                   smoothstep(0.6, 1.0, bf));
-    dye *= mix(1.0, 0.55, smoothstep(0.78, 0.97, bf));       // dye pools at the edge
+                   smoothstep(mix(0.6, 0.94, G), 1.0, bf));
+    dye *= mix(1.0, 0.55, smoothstep(mix(0.78, 0.93, G), 0.97, bf));       // dye pools at the edge
     float gap = 1.0 - smoothstep(0.0, 0.05 + 0.08 * n, bf);  // undyed tie lines
     dye = mix(dye, vec3(0.97, 0.93, 0.85), gap * 0.6 * crinkle);
     dye = mix(dye, dye * dye * 1.4, 0.3 * f);
 
     // Oil projection: palette blobs, inky membranes, thin-film shimmer.
     float v = f + 0.6 * length(w1 - 0.5);
-    vec3 oil = grad(pal, v * 1.3 + hue, 0.45);
+    vec3 oil = grad(pal, v * 1.3 + hue, mix(0.45, 0.12, G));
     float d = abs(fract(v * 4.0 - t * 0.05) - 0.5);
-    float line = smoothstep(0.40, 0.48, d);
+    float line = smoothstep(mix(0.40, 0.455, G), 0.48, d);
     vec3 irid = grad(pal, v * 5.0 + 0.4, 0.4);
     oil *= 0.55 + 0.7 * smoothstep(0.25, 0.75, f);
     oil += irid * 0.4 * smoothstep(0.28, 0.40, d) * (1.0 - line);
     oil *= 1.0 - 0.85 * line;
     oil = mix(vec3(lum(oil)), oil, 1.2);
 
-    return clamp(mix(dye, oil, mode), 0.0, 1.2);
+    vec3 col = clamp(mix(dye, oil, mode), 0.0, 1.2);
+    float geoW = smoothstep(0.3, 1.0, uGeo);
+    if (geoW > 0.001) col = mandala(p, t, sym, P1.w, pal, hue, col, geoW);
+    return col;
   }
 
   vec3 hueRotate(vec3 c, float h) {
@@ -210,6 +369,7 @@
     float boost = uFlowW[1] * 0.2 + uFlowW[2] * 0.75 + uFlowW[3] * 0.4 + uFlowW[4] * 0.55 + uFlowW[5] * 0.3;
     float m = uMelt * (0.88 + 0.12 * noise(p * 2.0 - t * 0.1));
     m = max(m, mix(m, 0.985, boost * smoothstep(0.3, 0.7, noise(p * 1.3 + t * 0.04))));
+    m = mix(m, m * 0.25, uGeo * exp(-dot(q, q) * 3.0));  // keep geometry crisp
     m = max(m, mix(m, 0.97, near * 0.7));     // cursor swirls linger
     vec3 col = mix(s, prev, m);
 
@@ -401,7 +561,6 @@
   // ---------- Scenes ("vibes") ----------
   // p: sym, warp, scale, spiral | bands, mode, crinkle, - | -, -, -, hueSpeed
 
-  let lockedPal = -1;               // >= 0: colour lock on, keep this palette
   const rand = (a, b) => a + Math.random() * (b - a);
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -411,14 +570,12 @@
     const sym = pick([0, 0, 3, 4, 5, 6, 6, 8, 10, 12]);
     // Without a kaleidoscope, band counts must be multiples of 5 to avoid a seam.
     const bands = sym === 0 ? pick([5, 10]) : Math.floor(rand(3, 9));
-    let pal = lockedPal;
-    if (pal < 0) {
-      do { pal = Math.floor(Math.random() * PALETTES.length); } while (prev && pal === prev.pal);
-    }
+    let pal;
+    do { pal = Math.floor(Math.random() * PALETTES.length); } while (prev && pal === prev.pal);
     const pattern = patternChoice >= 0 ? patternChoice : autoPattern();
     return {
       p: [sym, rand(1, 3.5), rand(0.8, 2.2), rand(-1.8, 1.8),
-          bands, mode, rand(0.3, 1), 0,
+          bands, mode, rand(0.3, 1), Math.random(),   // last = mandala seed
           0, 0, 0, rand(0.01, 0.04) * (Math.random() < 0.5 ? -1 : 1)],
       pal,
       pattern,
@@ -519,6 +676,7 @@
     gl.uniform2f(u.uCenter, center[0], center[1]);
     gl.uniform1f(u.uPresence, presence);
     gl.uniform1f(u.uHold, hold);
+    gl.uniform1f(u.uGeo, settings.geo);
     setScene('uA', sceneA);
     setScene('uB', B);
     gl.uniform3fv(u.uPalA, PALETTES[sceneA.pal].rgb);
@@ -620,19 +778,6 @@
     document.getElementById('btn-cursor').textContent = `Cursor: ${cursorFx ? 'On' : 'Off'}`;
     flash(cursorFx ? 'Cursor effects on' : 'Cursor effects off');
   }
-  function toggleColorLock() {
-    if (lockedPal >= 0) {
-      lockedPal = -1;
-      flash('Colors free');
-    } else {
-      // Lock whatever is (mostly) on screen; stop a fade into other colours.
-      lockedPal = (sceneB && fadeT > 0.5 ? sceneB : sceneA).pal;
-      sceneA.pal = lockedPal;
-      if (sceneB) sceneB.pal = lockedPal;
-      flash(`Colors locked: ${PALETTES[lockedPal].name}`);
-    }
-    document.getElementById('btn-lock').textContent = `Colors: ${lockedPal >= 0 ? 'Locked' : 'Free'}`;
-  }
   function cyclePattern() {
     patternChoice = patternChoice + 1 >= PATTERNS.length ? -1 : patternChoice + 1;
     const label = patternChoice < 0 ? 'Auto' : PATTERNS[patternChoice];
@@ -657,7 +802,6 @@
   document.getElementById('btn-new').onclick = newVibe;
   document.getElementById('btn-pattern').onclick = cyclePattern;
   document.getElementById('btn-cursor').onclick = toggleCursor;
-  document.getElementById('btn-lock').onclick = toggleColorLock;
   document.getElementById('btn-dream').onclick = () => setPaused(!paused);
   document.getElementById('btn-save').onclick = savePng;
   document.getElementById('btn-full').onclick = () => {
@@ -672,6 +816,7 @@
   }
   bindSlider('sl-flow', 'flow');
   bindSlider('sl-melt', 'melt');
+  bindSlider('sl-geo', 'geo');
 
   // How long each design stays before morphing to the next (far right = never).
   const holdEl = document.getElementById('sl-hold');
@@ -694,7 +839,6 @@
       case 'n': newVibe(); break;
       case 'p': cyclePattern(); break;
       case 'c': toggleCursor(); break;
-      case 'l': toggleColorLock(); break;
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
       case 'h': ui.classList.toggle('hidden'); break;
