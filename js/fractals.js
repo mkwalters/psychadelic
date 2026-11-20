@@ -24,7 +24,7 @@
   const settings = {
     speed: 1,         // set from the Speed slider through its curve
     glow: 0.5,
-    holdSeconds: 22,
+    holdSeconds: 10,
     meltSeconds: 4.5, // scene-change melt
   };
 
@@ -941,8 +941,6 @@
   let meltT = 0;             // 0→1 during a scene change (starts by condensing out of black)
   let time = 0;
   let paused = false;
-  let morph = false;
-  let mouseN = [0, 0], morphV = [0, 0];
   let userPan = [0, 0], userZoom = 1;
   let prevCam = null;
 
@@ -993,10 +991,7 @@
     const ph = s.cPh + sceneT * s.cW;
     let c = [s.c0[0] + s.cR * Math.cos(ph), s.c0[1] + s.cR * Math.sin(ph * 1.3)];
     let p = s.p.slice();
-    // Morph: the cursor nudges the fractal's constant, reshaping it live.
-    if (s.famName === 'Mandelbrot') c = [morphV[0] * 0.25, morphV[1] * 0.25];
-    else if (s.famName === 'Phoenix') { p[0] += morphV[0] * 0.08; p[1] += morphV[1] * 0.08; }
-    else { c[0] += morphV[0] * (s.famName === 'Julia' ? 0.05 : 0.12); c[1] += morphV[1] * (s.famName === 'Julia' ? 0.05 : 0.12); }
+    if (s.famName === 'Mandelbrot') c = [0, 0];
 
     // A spiral loop just wrapped: the view jumped back out by λ, which shows
     // the same picture, so map last frame's camera through the same jump.
@@ -1135,9 +1130,6 @@
       if (sp.u >= 1) { sp.u -= 1; sp.wrapped = true; }
     }
     if (holdT > settings.holdSeconds && !DEBUG) nextScene();
-    const target = morph ? mouseN : [0, 0];
-    morphV = [morphV[0] + (target[0] - morphV[0]) * Math.min(1, dt * 3),
-              morphV[1] + (target[1] - morphV[1]) * Math.min(1, dt * 3)];
   }
 
   let last = performance.now();
@@ -1183,11 +1175,6 @@
     paused = on;
     document.getElementById('btn-dream').textContent = on ? 'Flow ▶' : 'Pause ❚❚';
   }
-  function toggleMorph() {
-    morph = !morph;
-    document.getElementById('btn-cursor').textContent = `Morph: ${morph ? 'On' : 'Off'}`;
-    flash(morph ? 'Morph on: move the cursor to reshape the fractal' : 'Morph off');
-  }
   function cycleFamily() {
     familyChoice = familyChoice + 1 >= FAMILIES.length ? -1 : familyChoice + 1;
     const label = familyChoice < 0 ? 'Auto' : FAMILIES[familyChoice];
@@ -1211,7 +1198,6 @@
 
   document.getElementById('btn-new').onclick = newVibe;
   document.getElementById('btn-family').onclick = cycleFamily;
-  document.getElementById('btn-cursor').onclick = toggleMorph;
   document.getElementById('btn-dream').onclick = () => setPaused(!paused);
   document.getElementById('btn-save').onclick = savePng;
   document.getElementById('btn-full').onclick = () => {
@@ -1238,7 +1224,6 @@
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
-    mouseN = [(e.clientX / window.innerWidth) * 2 - 1, 1 - (e.clientY / window.innerHeight) * 2];
     if (!drag) return;
     const cam = camera(scene, sceneT);
     const dx = (e.clientX - drag.x) * renderScale, dy = -(e.clientY - drag.y) * renderScale;
@@ -1262,7 +1247,6 @@
       case ' ': e.preventDefault(); setPaused(!paused); break;
       case 'n': newVibe(); break;
       case 'p': cycleFamily(); break;
-      case 'c': toggleMorph(); break;
       case 'w': wobble.toggleAll(); break;
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
