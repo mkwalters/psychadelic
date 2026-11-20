@@ -16,7 +16,7 @@
   const floatTargets = !!gl.getExtension('EXT_color_buffer_float');
 
   const settings = {
-    flow: 0.57,     // overall speed (slider starts ~25% along)
+    flow: 0.47,     // overall speed (set from the Flow slider through FLOW_CURVE)
     melt: 0.62,     // feedback amount (trail length; slider starts ~25% along)
     cycle: 1,       // colour cycling speed
     geo: 0.15,      // Geometry slider: 0 loose/liquid → 1 sharp/intricate
@@ -824,6 +824,15 @@
   const wobbleSeconds = (speed) => 60 * Math.pow(4 / 60, speed); // 60s … 4s per swing
   const fmtSeconds = (sec) => (sec < 10 ? `${sec.toFixed(1)}s` : `${Math.round(sec)}s`);
 
+  // The Flow slider is a position 0…1, mapped onto speed with a curve:
+  // the slow end gets fine control and stays alive (never frozen), the top
+  // stays exciting without turning into a blur.
+  //   0% → 0.04 (slow drift) · 25% → 0.17 · 55% (start) → 0.47 · 100% → 1.1
+  const SLIDER_CURVES = {
+    flow: { start: 0.55, toValue: (x) => 0.04 + 1.06 * Math.pow(x, 1.5) },
+  };
+  const toValue = (w, x) => (w.curve ? w.curve.toValue(x) : x);
+
   const wobbles = [];
   function setupSlider(ctl) {
     const key = ctl.dataset.key;
@@ -831,7 +840,8 @@
     const w = {
       key, el, ctl,
       min: parseFloat(el.min), max: parseFloat(el.max),
-      center: settings[key],
+      curve: SLIDER_CURVES[key],
+      center: SLIDER_CURVES[key] ? SLIDER_CURVES[key].start : settings[key],
       on: false, open: false, dragging: false,
       engage: 0,
       phase: Math.random() * 100,
@@ -889,9 +899,10 @@
     // While you drag, the thumb follows your hand and becomes the new centre;
     // the wobble eases out and back in around it.
     el.value = w.center;
+    settings[key] = toValue(w, w.center);
     el.oninput = () => {
       w.center = parseFloat(el.value);
-      if (w.engage < 0.001) settings[key] = w.center;
+      if (w.engage < 0.001) settings[key] = toValue(w, w.center);
       drawZone(w);
     };
     el.addEventListener('pointerdown', () => { w.dragging = true; });
@@ -939,7 +950,7 @@
       w.engage += (target - w.engage) * Math.min(1, dt * 1.2);
       if (w.engage < 0.001 && target === 0) {
         w.engage = 0;
-        if (before > 0) { settings[w.key] = w.center; if (!w.dragging) w.el.value = w.center; }
+        if (before > 0) { settings[w.key] = toValue(w, w.center); if (!w.dragging) w.el.value = w.center; }
         continue;
       }
       w.phase += (dt * 2 * Math.PI) / wobbleSeconds(w.speed);
@@ -948,7 +959,7 @@
       const { amp, c } = wobbleZone(w);
       const centre = w.center + (c - w.center) * w.engage;
       const v = centre + amp * s * w.engage;
-      settings[w.key] = v;
+      settings[w.key] = toValue(w, v);
       if (!w.dragging) w.el.value = v;
     }
   }
