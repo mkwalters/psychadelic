@@ -166,3 +166,30 @@ button.wob span { display: inline-block; }
 .pop label span.name { width: 3.6em; }
 .pop input[type=range] { flex: 1; width: auto; min-width: 0; }
 .pop .val { min-width: 3.2em; text-align: right; }
+
+/* ---- Style switch (Tie-dye | Fractal) ---- */
+.style-switch {
+  display: inline-flex;
+  margin: 0 8px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  vertical-align: middle;
+}
+.style-switch a {
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+}
+.style-switch a:hover { color: #fff; }
+.style-switch a.on {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(255, 60, 200, 0.6), rgba(60, 140, 255, 0.6));
+  box-shadow: 0 0 10px rgba(255, 90, 220, 0.4);
+}
+.brand .style-switch { opacity: 1; font-weight: 500; }

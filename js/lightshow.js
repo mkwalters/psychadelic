@@ -852,6 +852,7 @@
       case 's': savePng(); break;
       case 'f': document.getElementById('btn-full').click(); break;
       case 'h': ui.classList.toggle('hidden'); break;
+      case 't': location.href = 'index.html'; break;
     }
   });
 
